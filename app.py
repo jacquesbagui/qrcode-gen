@@ -1,12 +1,14 @@
 from datetime import datetime
 import os
-from flask import Flask, request, send_from_directory, render_template, redirect, url_for
+from flask import Flask, flash, request, send_from_directory, render_template, redirect, url_for
 import pandas as pd
 import qrcode
 from PIL import Image
 import zipfile
+import secrets
 
 app = Flask(__name__)
+app.secret_key = secrets.token_urlsafe(24)  
 ALLOWED_EXTENSIONS = {'xlsx'}
 
 # Base directories
@@ -31,16 +33,18 @@ def upload_file():
     if request.method == 'POST':
         file = request.files.get('file')
         color = request.form.get('color', '#132DEA')  # Default color
-        session_id = datetime.now().strftime("%Y%m%d%H%M%S")  # Unique session ID
-        session_folder = os.path.join(BASE_QR_CODE_FOLDER, session_id)
-        os.makedirs(session_folder, exist_ok=True)  # Create a unique folder for this session
-
         if file and allowed_file(file.filename):
+            session_id = datetime.now().strftime("%Y%m%d%H%M%S")
+            session_folder = os.path.join(BASE_QR_CODE_FOLDER, session_id)
+            os.makedirs(session_folder, exist_ok=True)
             filename = file.filename
             filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(filepath)  # Save the uploaded file
-            generate_qr_codes(filepath, color, session_folder)
-            return redirect(url_for('download_folder', filename=filename, folder=session_id))
+            file.save(filepath)
+            flash('File uploaded successfully! Generating QR codes...', 'success')
+            if generate_qr_codes(filepath, color, session_folder):
+                return redirect(url_for('download_folder', folder=session_id))
+        else:
+            flash('Invalid file type. Please upload an .xlsx file.', 'error')
     return render_template('upload.html')
 
 
@@ -86,27 +90,53 @@ def generate_vcard_qr_code(firstname, lastname, email, phone, company, job, stre
     # Save the final image
     img.save(output_path)
 
+
+def verify_columns(df, expected_columns):
+    missing_columns = [col for col in expected_columns if col not in df.columns]
+    if missing_columns:
+        flash(f"Les colonnes suivantes sont manquantes dans le DataFrame: {', '.join(missing_columns)}", 'error')
+        raise ValueError(f"Les colonnes suivantes sont manquantes dans le DataFrame: {', '.join(missing_columns)}")
+    return True
+
 def generate_qr_codes(filepath, color, session_folder):
     employee_data = pd.read_excel(filepath)
-
-    for index, row in employee_data.iterrows():
-        firstname = clean_field(row.get('Prénom'))
-        lastname = clean_field(row.get('Nom'))
-        email = clean_field(row.get('E-mail'))
-        phone = clean_field(row.get('Numéro de téléphone'))
-        company = clean_field(row["Nom de l'entreprise"])
-        job = clean_field(row['Intitulé du poste'])
-        street = clean_field(row['Adresse postale'])
-        city = clean_field(row['Ville'])
-        zip_code = clean_field(row['Code postal'])
-        country = clean_field(row['Pays/Région'])
-        website = clean_field(row['URL du site web'])
-        
-        output_path = f"{session_folder}/{firstname}-{lastname}.png"
-        if not os.path.exists(output_path):  # Generate only if it doesn't exist
-            generate_vcard_qr_code(firstname, lastname, email, phone, company, job, street, city, zip_code, country, website, color, output_path)
-        else:
-            print(f"Skipping generation for {output_path}: File already exists.")
+    
+    
+    # Liste des noms de colonnes attendues
+    expected_columns = [
+        'Prénom', 'Nom', 'E-mail', 'Numéro de téléphone', "Nom de l'entreprise", 
+        'Intitulé du poste', 'Adresse postale', 'Ville', 'Code postal', 'Pays/Région', 'URL du site web'
+    ]
+    
+    # Vérification des colonnes
+    try:
+        missing_columns = [col for col in expected_columns if col not in employee_data.columns]
+        if missing_columns:
+            flash(f"Les colonnes suivantes sont manquantes dans le DataFrame: {', '.join(missing_columns)}", 'error')
+            print(f"Les colonnes suivantes sont manquantes dans le DataFrame: {', '.join(missing_columns)}")
+            return False
+        for index, row in employee_data.iterrows():
+            firstname = clean_field(row.get('Prénom'))
+            lastname = clean_field(row.get('Nom'))
+            email = clean_field(row.get('E-mail'))
+            phone = clean_field(row.get('Numéro de téléphone'))
+            company = clean_field(row["Nom de l'entreprise"])
+            job = clean_field(row['Intitulé du poste'])
+            street = clean_field(row['Adresse postale'])
+            city = clean_field(row['Ville'])
+            zip_code = clean_field(row['Code postal'])
+            country = clean_field(row['Pays/Région'])
+            website = clean_field(row['URL du site web'])
+            
+            output_path = f"{session_folder}/{firstname}-{lastname}.png"
+            if not os.path.exists(output_path):  # Generate only if it doesn't exist
+                generate_vcard_qr_code(firstname, lastname, email, phone, company, job, street, city, zip_code, country, website, color, output_path)
+            else:
+                print(f"Skipping generation for {output_path}: File already exists.")
+        return True
+    except ValueError as e:
+        print(e)
+        return
 
 def zip_folder(folder_path, output_path):
     """Zip the contents of an entire folder (with subfolders) into a zip file."""
