@@ -3,49 +3,25 @@
 <head>
     <meta charset="UTF-8">
     <title>Session QR Codes</title>
-    <style>
-        body {
-            font-family: Arial, sans-serif;
-            margin: 20px;
-        }
-        .qr-code {
-            margin-bottom: 20px;
-            padding: 10px;
-            border: 1px solid #ddd;
-            display: inline-block;
-        }
-        img {
-            margin-top: 10px;
-        }
-        .header {
-            margin-bottom: 30px;
-        }
-
-        .session {
-            margin-bottom: 20px;
-            padding: 10px;
-            border: 1px solid #ddd;
-        }
-        h2 {
-            color: #333;
-        }
-    </style>
+    <link href="https://cdn.tailwindcss.com" rel="stylesheet">
 </head>
-<body>
-    <div class="header">
-        <h1>Current QR Codes for Session ID: {{ session.id }}</h1>
-        <p>Generated at: {{ session.created_at }}</p>
-        <a href="{{ url_for('download_session_zip', session_id=session.id) }}">Download All QR Codes as ZIP</a>
+<body class="bg-gray-100">
+    <div class="max-w-4xl mx-auto px-4 py-8">
+        <div class="bg-white shadow-md rounded px-8 pt-6 pb-8 mb-4">
+            <h1 class="text-xl font-semibold mb-4">Current QR Codes for Session ID: {{ session.id }}</h1>
+            <p>Generated at: {{ session.created_at }}</p>
+            <a class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded" href="{{ url_for('download_session_zip', session_id=session.id) }}">Download All QR Codes as ZIP</a>
+        </div>
+
+        <h1 class="text-2xl font-semibold my-4">QR Code Session History</h1>
+        {% for session in sessions %}
+        <div class="bg-white shadow-md rounded px-8 pt-6 pb-8 mb-4">
+            <h2 class="text-lg font-semibold">Session ID: {{ session.id }} - Created at: {{ session.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</h2>
+            <a class="bg-blue-500 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded" href="{{ url_for('download_session_zip', session_id=session.id) }}">Download All QR Codes as ZIP</a>
+        </div>
+        {% else %}
+        <p>No sessions found.</p>
+        {% endfor %}
     </div>
-    
-    <h1>QR Code Session History</h1>
-    {% for session in sessions %}
-    <div class="session">
-        <h2>Session ID: {{ session.id }} - Created at: {{ session.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</h2>
-        <a href="{{ url_for('download_session_zip', session_id=session.id) }}">Download All QR Codes as ZIP</a>
-    </div>
-    {% else %}
-    <p>No sessions found.</p>
-    {% endfor %}
 </body>
 </html>
