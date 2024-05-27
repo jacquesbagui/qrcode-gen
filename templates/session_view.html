@@ -1,0 +1,51 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <title>Session QR Codes</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            margin: 20px;
+        }
+        .qr-code {
+            margin-bottom: 20px;
+            padding: 10px;
+            border: 1px solid #ddd;
+            display: inline-block;
+        }
+        img {
+            margin-top: 10px;
+        }
+        .header {
+            margin-bottom: 30px;
+        }
+
+        .session {
+            margin-bottom: 20px;
+            padding: 10px;
+            border: 1px solid #ddd;
+        }
+        h2 {
+            color: #333;
+        }
+    </style>
+</head>
+<body>
+    <div class="header">
+        <h1>Current QR Codes for Session ID: {{ session.id }}</h1>
+        <p>Generated at: {{ session.created_at }}</p>
+        <a href="{{ url_for('download_session_zip', session_id=session.id) }}">Download All QR Codes as ZIP</a>
+    </div>
+    
+    <h1>QR Code Session History</h1>
+    {% for session in sessions %}
+    <div class="session">
+        <h2>Session ID: {{ session.id }} - Created at: {{ session.created_at.strftime('%Y-%m-%d %H:%M:%S') }}</h2>
+        <a href="{{ url_for('download_session_zip', session_id=session.id) }}">Download All QR Codes as ZIP</a>
+    </div>
+    {% else %}
+    <p>No sessions found.</p>
+    {% endfor %}
+</body>
+</html>

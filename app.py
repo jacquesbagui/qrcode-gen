@@ -1,24 +1,35 @@
 from datetime import datetime
+from flask import Flask, request, redirect, send_file, url_for, render_template, flash, jsonify
+from flask_sqlalchemy import SQLAlchemy
+from flask_migrate import Migrate
+from sqlalchemy.sql import func
 import os
-from flask import Flask, flash, request, send_from_directory, render_template, redirect, url_for
 import pandas as pd
 import qrcode
-from PIL import Image
-import zipfile
+from zipfile import ZipFile
+from io import BytesIO
+from base64 import b64encode
 import secrets
 
 app = Flask(__name__)
-app.secret_key = secrets.token_urlsafe(24)  
+app.config['SECRET_KEY'] = secrets.token_urlsafe(24)
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///qrcode.db'
+db = SQLAlchemy(app)
+migrate = Migrate(app, db)
+
+class Session(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    created_at = db.Column(db.DateTime, default=datetime.utcnow)
+
+class QRCodeEntry(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    session_id = db.Column(db.Integer, db.ForeignKey('session.id'), nullable=False)
+    data = db.Column(db.Text, nullable=False)
+    color = db.Column(db.Text, nullable=False)
+    firstname = db.Column(db.Text, nullable=False)
+    lastname = db.Column(db.Text, nullable=False)
+
 ALLOWED_EXTENSIONS = {'xlsx'}
-
-# Base directories
-UPLOAD_FOLDER = 'uploads'
-BASE_QR_CODE_FOLDER = 'qr_codes'
-
-# Ensure base upload directory exists
-os.makedirs(UPLOAD_FOLDER, exist_ok=True)
-
-app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
 def allowed_file(filename):
     return '.' in filename and filename.rsplit('.', 1)[1].lower() in ALLOWED_EXTENSIONS
@@ -31,22 +42,38 @@ def clean_field(field):
 @app.route('/', methods=['GET', 'POST'])
 def upload_file():
     if request.method == 'POST':
-        file = request.files.get('file')
-        color = request.form.get('color', '#132DEA')  # Default color
+        file = request.files['file']
+        color = request.form.get('color', '#132DEA')
         if file and allowed_file(file.filename):
-            session_id = datetime.now().strftime("%Y%m%d%H%M%S")
-            session_folder = os.path.join(BASE_QR_CODE_FOLDER, session_id)
-            os.makedirs(session_folder, exist_ok=True)
-            filename = file.filename
-            filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
-            file.save(filepath)
-            flash('File uploaded successfully! Generating QR codes...', 'success')
-            if generate_qr_codes(filepath, color, session_folder):
-                return redirect(url_for('download_folder', folder=session_id))
+            session = Session()
+            db.session.add(session)
+            db.session.commit()
+            process_save_data(file, session.id, color)
+            flash('File uploaded and processed successfully!', 'success')
+            return redirect(url_for('view_session', session_id=session.id))
         else:
             flash('Invalid file type. Please upload an .xlsx file.', 'error')
     return render_template('upload.html')
 
+def process_save_data(file, session_id, color):
+    df = pd.read_excel(file)
+    for index, row in df.iterrows():
+        firstname = clean_field(row.get('Prénom'))
+        lastname = clean_field(row.get('Nom'))
+        email = clean_field(row.get('E-mail'))
+        phone = clean_field(row.get('Numéro de téléphone'))
+        company = clean_field(row["Nom de l'entreprise"])
+        job = clean_field(row['Intitulé du poste'])
+        street = clean_field(row['Adresse postale'])
+        city = clean_field(row['Ville'])
+        zip_code = clean_field(row['Code postal'])
+        country = clean_field(row['Pays/Région'])
+        website = clean_field(row['URL du site web'])
+        
+        vcard_data = generate_vcard_data(firstname, lastname, email, phone, company, job, street, city, zip_code, country, website)
+        qr_entry = QRCodeEntry(session_id=session_id, data=vcard_data, color=color, firstname=firstname, lastname=lastname)
+        db.session.add(qr_entry)
+    db.session.commit()
 
 def generate_vcard_data(firstname, lastname, email, phone, company, job, street, city, zip, country, website):
     name = firstname + " " + lastname
@@ -54,108 +81,53 @@ def generate_vcard_data(firstname, lastname, email, phone, company, job, street,
         "BEGIN:VCARD",
         "VERSION:3.0",
         f"N:{lastname};{firstname}",
-        f"FN:{name}"
+        f"FN:{name}",
+        f"ORG:{company}" if company else "",
+        f"TITLE:{job}" if job else "",
+        f"ADR:;;{street};{city};;{zip};{country}" if street and city and zip and country else "",
+        f"TEL:{phone}" if phone else "",
+        f"EMAIL:{email}" if email else "",
+        f"URL:{website}" if website else "",
+        "END:VCARD"
     ]
-    
-    if company:
-        fields.append(f"ORG:{company}")
-    if job:
-        fields.append(f"TITLE:{job}")
-    if street and city and zip and country:
-        fields.append(f"ADR:;;{street};{city};;{zip};{country}")
-    if phone:
-        fields.append(f"TEL:{phone}")
-    if email:
-        fields.append(f"EMAIL:{email}")
-    if website:
-        fields.append(f"URL:{website}")
-    
-    fields.append("END:VCARD")
-    
-    return '\n'.join(fields)
+    return '\n'.join(filter(None, fields))
 
-def generate_vcard_qr_code(firstname, lastname, email, phone, company, job, street, city, zip, country, website, color, output_path):    
-    vcard_data = generate_vcard_data(firstname, lastname, email, phone, company, job, street, city, zip, country, website)
-    qr = qrcode.QRCode(
-        version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_L,
-        box_size=10,
-        border=4,
-    )
-    qr.add_data(vcard_data)
+def generate_qr_code(data):
+    qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=10, border=4)
+    qr.add_data(data)
     qr.make(fit=True)
+    img = qr.make_image(fill_color="black", back_color="white")
+    return img
 
-    img = qr.make_image(fill_color=color, back_color="transparent").convert("RGBA")
+@app.route('/session/<int:session_id>')
+def view_session(session_id):
+    session = Session.query.get_or_404(session_id)
+    #qr_entries = QRCodeEntry.query.filter_by(session_id=session_id).all()
+    sessions = Session.query.order_by(Session.created_at.desc()).all()
+    return render_template('session_view.html', session=session, sessions=sessions)
 
-    # Save the final image
-    img.save(output_path)
-
-
-def verify_columns(df, expected_columns):
-    missing_columns = [col for col in expected_columns if col not in df.columns]
-    if missing_columns:
-        flash(f"Les colonnes suivantes sont manquantes dans le DataFrame: {', '.join(missing_columns)}", 'error')
-        raise ValueError(f"Les colonnes suivantes sont manquantes dans le DataFrame: {', '.join(missing_columns)}")
-    return True
-
-def generate_qr_codes(filepath, color, session_folder):
-    employee_data = pd.read_excel(filepath)
-    
-    
-    # Liste des noms de colonnes attendues
-    expected_columns = [
-        'Prénom', 'Nom', 'E-mail', 'Numéro de téléphone', "Nom de l'entreprise", 
-        'Intitulé du poste', 'Adresse postale', 'Ville', 'Code postal', 'Pays/Région', 'URL du site web'
-    ]
-    
-    # Vérification des colonnes
+@app.route('/download/session/<int:session_id>')
+def download_session_zip(session_id):
+    zip_filename = generate_and_zip_qr_codes(session_id)
     try:
-        missing_columns = [col for col in expected_columns if col not in employee_data.columns]
-        if missing_columns:
-            flash(f"Les colonnes suivantes sont manquantes dans le DataFrame: {', '.join(missing_columns)}", 'error')
-            print(f"Les colonnes suivantes sont manquantes dans le DataFrame: {', '.join(missing_columns)}")
-            return False
-        for index, row in employee_data.iterrows():
-            firstname = clean_field(row.get('Prénom'))
-            lastname = clean_field(row.get('Nom'))
-            email = clean_field(row.get('E-mail'))
-            phone = clean_field(row.get('Numéro de téléphone'))
-            company = clean_field(row["Nom de l'entreprise"])
-            job = clean_field(row['Intitulé du poste'])
-            street = clean_field(row['Adresse postale'])
-            city = clean_field(row['Ville'])
-            zip_code = clean_field(row['Code postal'])
-            country = clean_field(row['Pays/Région'])
-            website = clean_field(row['URL du site web'])
-            
-            output_path = f"{session_folder}/{firstname}-{lastname}.png"
-            if not os.path.exists(output_path):  # Generate only if it doesn't exist
-                generate_vcard_qr_code(firstname, lastname, email, phone, company, job, street, city, zip_code, country, website, color, output_path)
-            else:
-                print(f"Skipping generation for {output_path}: File already exists.")
-        return True
-    except ValueError as e:
-        print(e)
-        return
+        return send_file(zip_filename, as_attachment=True, download_name=f'session_{session_id}_qrcodes.zip')
+    except Exception as e:
+        return str(e)
 
-def zip_folder(folder_path, output_path):
-    """Zip the contents of an entire folder (with subfolders) into a zip file."""
-    with zipfile.ZipFile(output_path, 'w', zipfile.ZIP_DEFLATED) as zipf:
-        for root, dirs, files in os.walk(folder_path):
-            for file in files:
-                zipf.write(os.path.join(root, file), os.path.relpath(os.path.join(root, file), os.path.join(folder_path, '..')))
-                
-@app.route('/download/folder/<folder>')
-def download_folder(folder):
-    directory = os.path.join(BASE_QR_CODE_FOLDER, folder)
-    if os.path.exists(directory):
-        zip_path = f"{directory}.zip"        
-        if not os.path.exists(zip_path):
-            zip_folder(directory, zip_path)
-        return send_from_directory(os.path.dirname(zip_path), os.path.basename(zip_path), as_attachment=True)
-    else:
-        return "Folder not found.", 404
+def generate_and_zip_qr_codes(session_id):
+    qr_entries = QRCodeEntry.query.filter_by(session_id=session_id).all()
+    zip_filename = f'tmp/session_{session_id}.zip'
+    os.makedirs(os.path.dirname(zip_filename), exist_ok=True)
 
-
-if __name__ == '__main__':
-    app.run(debug=True)
+    with ZipFile(zip_filename, 'w') as zipf:
+        for entry in qr_entries:
+            qr = qrcode.QRCode(version=1, error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=10, border=4)
+            qr.add_data(entry.data)
+            qr.make(fit=True)
+            img = qr.make_image(fill_color=entry.color, back_color="transparent").convert("RGBA")
+            qr_filename = f'{entry.firstname}_{entry.lastname}.png'
+            qr_path = f'tmp/{qr_filename}'
+            img.save(qr_path)
+            zipf.write(qr_path, arcname=qr_filename)
+            os.remove(qr_path)
+    return zip_filename
